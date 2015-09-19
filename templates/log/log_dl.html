@@ -1,0 +1,38 @@
+{% load staticfiles %} {% load tz %} {% load hex_id %}
+<!DOCTYPE html>
+<html>
+	<head>
+		<link rel="stylesheet" type="text/css" href="{% static "css/main.css" %}">
+		<link rel="icon" type="image/svg+xml" href="{% static "img/favicon.svg" %}">
+		<link rel="alternate icon" type="image/ico" href="{% static "img/favicon.png" %}">
+		<script type="text/javascript" src="{% static "js/jquery.min.js" %}"></script>
+		<script type="text/javascript" src="{% static "js/logdl.js" %}"></script>
+		<meta charset="utf-8">
+		<meta name="author" content="Colin Stevens">
+		<title>IRC log for #{{ channel }}</title>
+	</head>
+	<body>
+	<table id="log_lines" style="margin-bottom: 0px">
+	{% for line in lines %}
+		<tr class="message-row">
+		<td id="{{ line.pk }}">
+			<a class="timestamp" title="{{ line.timestamp|date:"l, F jS - h:i:s A" }}" href="#{{ line.timestamp|date:"H-i-s" }}">[{{ line.timestamp|date:"Y-m-d H:i:s" }}]</a>
+			<span class="message-prefix">
+			{% if line.msgType = 'PMSG' %} <span class="nick nick-{% hexId line.nick %}" title="{{ line.hostname }}">&lt;{{ line.nick }}&gt;</span>
+			{% elif line.msgType == 'JOIN' %} <i>--&gt; <span class="nick nick-{% hexId line.nick %}">{{ line.nick }}</span></i>
+			{% elif line.msgType == 'PART' %} <i>&lt;-- <span class="nick nick-{% hexId line.nick %}">{{ line.nick }}</span></i>
+			{% else %} <i>*** <span class="nick nick-{% hexId line.nick %}">{{ line.nick }}</span></i>
+			{% endif %}
+			</span>
+			{% if line.msgType != "PMSG" %}
+			<span class="message" style="font-style: italic">{{ line.message }}</span>
+			{% else %}
+			<span class="message">{{ line.message }}</span>
+			{% endif %}
+			</span>
+		</td>
+		</tr>
+	{% endfor %}
+	</table>
+	</body>
+</html>

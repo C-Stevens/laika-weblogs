@@ -1,0 +1,6 @@
+manage.py
+**/.directory
+**/*.kate-swp
+**/__pycache__
+/weblogs/settings.py
+/log/migrations/*

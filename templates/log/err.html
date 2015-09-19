@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<title>Error</title>
+		<meta charset="utf-8">
+		<style>
+		body {
+			background:url("/static/img/bg.png");
+			font-family: Verdana, Sans;
+			margin: auto auto;
+			width: 48%;
+			padding-top: 10%;
+		}
+		</style>
+	</head>
+	<body>
+		<h1>Error: {{ errName }}</h1><hr/>
+		<p><i>Details: </i>{{ errDetails }}</p>
+		<p><a href="javascript:history.back()">Return</a></p>
+	</body>
+</html>

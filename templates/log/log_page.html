@@ -1,0 +1,60 @@
+{% load staticfiles %} {% load pipeline %} {% stylesheet "css/main.css" %} {% load tz %}
+<!DOCTYPE html>
+<html>
+	<head>
+		<link rel="stylesheet" type="text/css" href="{% static "css/main.css" %}">
+		<link rel="icon" type="image/svg+xml" href="{% static "img/favicon.svg" %}">
+		<link rel="alternate icon" type="image/ico" href="{% static "img/favicon.png" %}">
+		<script type="text/javascript" src="{% static "js/jquery.min.js" %}"></script>
+		<script type="text/javascript" src="{% static "js/moment.min.js" %}"></script>
+		<script type="text/javascript" src="{% static "js/sha1.js" %}"></script>
+		<script type="text/javascript" src="{% static "js/main.js" %}"></script>
+		<meta charset="utf-8">
+		<meta name="author" content="Colin Stevens">
+		<title>IRC log for #{{ channel }}</title>
+<body>
+	<div id="download_box" style="display: none">
+		<div id="header">
+			<img id="download_box_close" src="{% static "img/close.svg" %}" alt="Close window"></img>
+			Download log file
+		</div>
+		<div id="content">
+			<form action="/weblog/{{ channel }}/dl/" method="post">
+			{% csrf_token %}
+				<table cellspacing=7px id="dl_form">
+				{% for field in dl_form %}
+					<tr><td class="{{ field.id_for_label }}">{{ field.label }}</td><td>{{ field }}</td></tr>
+				{% endfor %}
+				<tr><td colspan=2 id="xml_notice"></td></tr>
+				<tr><td colspan=2 id="dl_submit"><button type="submit">Download</button></td></tr>
+				</table>
+			</form>
+		</div>
+	</div>
+	<div id="status-bar">
+		<img id="download" src="{% static "img/download-icon.svg" %}" alt="Download logs"></img>
+		<div id="loader"><img src="{% static "img/loading.svg" %}" alt="Refreshing logs..."></img></div>
+		<div id="error_box" style="display:none">
+			<span id="prefix">Error: </span>
+			<span id="user_can_post"></span>
+			<span id="valid_password"></span>
+			<span id="valid_nickname"></span>
+			<span id="valid_message"></span>
+		</div>
+	</div>
+	
+	<table id="log_lines">
+	</table>
+	<form id="weblog_form" action="/weblog/{{ channel }}/" method="post">
+	{% csrf_token %}
+		<table id="message-form">
+		<tr>
+		{% for field in user_form %}
+			<td class="{{ field.id_for_label }}">{{ field }}</td>
+		{% endfor %}
+		<td><button class="message-submit" type="submit" value="Send"><img src="{% static "img/arrow-submit.svg" %}" alt="Submit"></img></button></td>
+		</tr>
+		</table>
+	</form>
+</body>
+</html>
