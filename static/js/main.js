@@ -250,7 +250,6 @@ function compile_message_row(json_msg) {
 	parsed_timestamp.innerHTML = '['+timestamp.format('YYYY-MM-DD HH:mm:ss')+']';
 
 	message_prefix.setAttribute("class", "message_prefix");
-	//parsed_nick.setAttribute("class", "nick");
 	parsed_nick.setAttribute("title", hostname);
 	parsed_nick.setAttribute("class", "nick nick-"+get_id_from_nickname(nick));
 	if(msgType == 'PMSG') {
