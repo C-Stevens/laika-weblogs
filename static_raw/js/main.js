@@ -39,11 +39,9 @@ $(document).ready(function() {
 				'valid_nickname': "No nickname supplied.",
 				'valid_message':"No message supplied.",
 			};
-			console.log(data); // DEBUG
 			$.each(data, function(key, value) {
 				if(!value && value != null) {
 					create_error_box();
-					console.log("KEY: "+key); // DEBUG
 					$("#error_box").children("#"+key).html(error_msg_mappings[key]);
 				} else {
 					$("#error_box").children("#"+key).html("");
