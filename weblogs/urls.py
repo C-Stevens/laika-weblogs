@@ -20,4 +20,5 @@ from log import views
 urlpatterns = [
     url(r'^admin/', include(admin.site.urls)),
     url(r'^weblog/', include('log.urls')),
+    url(r'^$', views.root)
 ]

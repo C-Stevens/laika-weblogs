@@ -20,8 +20,11 @@ import json
 SOCKET_ADDR = 'localhost'
 SOCKET_PORT = 9989
 
+def root(request):
+	return HttpResponseRedirect('/weblog') # Default starting URL
+
 def weblogs(request):
-	return HttpResponse("Index! :3")
+	return HttpResponseRedirect('/weblog/pwiki') # Default channel
 
 def channel(request, channel):
 	# Disabed for suspected performance issues:
