@@ -207,7 +207,7 @@ class log_poster(object):
 		self.bouncer_hostname = "***!znc@znc.in"
 		self.nickInfo = {} # Dict for storing what channels nicknames are in, to properly deal with QUIT messages
 	def run(self):
-		self.db = MySQLdb.connect(host="localhost", user="", passwd="", db="irc-weblogs") # Production login omitted
+		self.db = MySQLdb.connect(host="localhost", user="", passwd="", db="irc-weblogs", charset="utf8") # Production login omitted
 		channel_logs = dummy_logger(self)
 		self.cursor = self.db.cursor()
 		self.ircLog.register(channel_logs)
