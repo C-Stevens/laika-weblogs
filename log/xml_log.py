@@ -17,7 +17,7 @@ def createLog(lines):
 		line_timestamp.text = str(l.timestamp)
 		line_msgType = xml.SubElement(child_line, 'field', attrib={'type' : "CharField", 'name' : "msgType"})
 		line_msgType.text = formatMsg(l.msgType)
-	return xml.tostringlist(root, encoding="utf8", method='xml', short_empty_elements=False)
+	return xml.tostringlist(root, encoding="utf8", method='xml')
 
 def stripColors(message):
 	regex = '/\x03(\d\d?)(?:,(\d\d?))?'
