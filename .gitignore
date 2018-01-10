@@ -2,5 +2,11 @@ manage.py
 **/.directory
 **/*.kate-swp
 **/__pycache__
+*.pyc
+*.pye
+core
+**/core
+*.map
 /weblogs/settings.py
 /log/migrations/*
+log/weblog_server_test.py
