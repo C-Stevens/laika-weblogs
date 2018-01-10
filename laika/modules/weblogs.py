@@ -1,310 +1,383 @@
-import threading
 import datetime
+import dateutil.parser
 import MySQLdb
+import threading
 import socket
+import socketserver
 import struct
 import time
 import os
 import sys
 import hashlib
+import json
 
 class weblog_manager(object):
-	def __init__(self, ircLog, botLog, socket, commandManager):
-		self.ircLog = ircLog
-		self.botLog = botLog
-		self.socket = socket
-		self.commandManager = commandManager
-		self.logPoster = log_poster(self, self.ircLog)
-		self.socketListener = socket_listener(self)
-		self.threadPool = []
-		self.spawn_threads()
-	def spawn_threads(self):
-		'''Spawn threads for parent objects.'''
-		posterThread = threading.Thread(target=self.logPoster.run, name="logPoster_thread")
-		socketThread = threading.Thread(target=self.socketListener.listen_loop, name="socketListener_thread")
-		self.threadPool.append(socketThread)
-		self.threadPool.append(posterThread)
-		for t in self.threadPool:
-			t.start()
-		for t in self.threadPool:
-			t.join()
+    def __init__(self, ircLogManager, botLog, botSocket, commandManager):
+        self.ircLogManager = ircLogManager
+        self.botSocket = botSocket
 
-class irc_line:
-	def __init__(self):
-		'''All variables except self.timestamp are either None, or relevant strings.'''
-		self.message = None
-		self.nickname = None
-		self.hostname = None
-		self.timestamp = datetime.datetime.now() # Automatically generate on instance spawn
-		self.channel = None
-		self.messageType = None
-	def determine_messageType(self, split_line):
-		'''Attempts to determine nature of the line.'''
-		if split_line[0] == "PRIVMSG" or split_line[1] == "PRIVMSG": # PRIVMSG can be in index 0 (self user) or index 1 (other user).
-			if split_line[3] == ":\x01ACTION":
-				return "ACTN"
-			else:
-				return "PMSG"
-		elif split_line[1] == "JOIN":
-			return "JOIN"
-		elif split_line[1] == "PART":
-			return "PART"
-		elif split_line[1] == "QUIT":
-			return "QUIT"
-		elif split_line[1] == "TOPIC":
-			return "TPIC"
-		elif split_line[1] == "NOTICE":
-			return "NTCE"
-		else:
-			raise RuntimeError("Couldn't determine message type")
-			return
-	def extract_message(self, split_line):
-		'''Reconstructs message string based upon messageType.'''
-		if self.messageType == "JOIN":
-			return "has joined the channel."
-		elif self.messageType == "PART":
-			if len(split_line) > 3: # Part message was supplied
-				return "has left the channel: {0}".format(' '.join(split_line[3:])[1:])
-			else:
-				return "has left the channel."
-		elif self.messageType == "QUIT":
-			if len(split_line) > 2: # Quit message was supplied
-				return "has quit ({0}).".format(' '.join(split_line[2:])[1:])
-			else:
-				return "has quit."
-		elif self.messageType == "TPIC":
-			return "has changed the topic to: {0}".format(' '.join(split_line[3:])[1:])
-		elif self.messageType == "NTCE":
-			return "has issued a channel notice: \"{0}\"".format(' '.join(split_line[3:])[1:])
-		elif self.messageType == "PMSG":
-			if split_line[0] == "PRIVMSG": # Socket PRIVMSG
-				return ' '.join(split_line[2:])[1:]
-			else: # Server PRIVMSG
-				return ' '.join(split_line[3:])[1:]
-		elif self.messageType == "ACTN":
-			return ' '.join(split_line[4:])
-	def extract_hostname(self, split_line):
-		'''Extracts user hostname out of an IRC server line.'''
-		## This will report a false hostname for lines coming out of the socket log,
-		## the socketLog object instance is meant to have more knowledge than this
-		## line object, and should take responsibility of correcting this incorrect
-		## parsing.
-		return split_line[0][1:]
-	def extract_nickname(self, split_line):
-		## Ditto above. This will incorrectly report the nickname due to differing
-		## syntax of socket and server log formatting.
-		return self.hostname.split('!', 1)[0]
-	def extract_channel(self, split_line):
-		if split_line[0] == "PRIVMSG": # Socket line formatting
-			return split_line[1].replace('#','') # Strip off '#' to avoid HTML anchors in URL
-		elif self.messageType == "QUIT":
-			## Quit messages have no channel data, this will be filled in with logic not present here
-			return
-		else:
-			if split_line[2].replace('#','').startswith(':'): # Some server lines will format channel as :(&/#)<channel> instead of just (&/#)<channel>
-				return split_line[2].replace('#','')[1:]
-			else:
-				return split_line[2].replace('#','')
-	def set_timestamp(self, new_timestamp):
-		'''Provides a method to replace the automatically generated timestamp.'''
-		if type(new_timestamp) == datetime.datetime:
-			self.timestamp = new_timestamp
-		else: # User provided something unusable
-			raise NotImplementedError("Cannot assign object to timestamp (expects datetime.datetime object).")
-	def parseLine(self, line):
-		'''Accepts a raw, unsplit IRC line and parses it into relevant internal variables.'''
-		if type(line) is list: # Someone has pre-split the line
-			split_line = line
-		elif type(line) is str:
-			split_line = line.split(' ')
-		else:
-			raise NotImplementedError("Provided line is of invalid type.")
-		#try:
-			#self.messageType = self.determine_messageType(split_line)
-			#self.message = self.extract_message(split_line)
-			#self.hostname = self.extract_hostname(split_line)
-			#self.nickname = self.extract_nickname(split_line)
-			#self.channel = self.extract_channel(split_line)
-		#except Exception as e:
-			#print("Could not automatically parse line.",e)
-			#return
-		self.messageType = self.determine_messageType(split_line)
-		self.message = self.extract_message(split_line)
-		self.hostname = self.extract_hostname(split_line)
-		self.nickname = self.extract_nickname(split_line)
-		self.channel = self.extract_channel(split_line)
-	def printData(self):
-		'''Prints out all stored instance variables. Useful for debug.'''
-		print("messageType: {0}\nmessage: {1}\nhostname: {2}\nnickname: {3}\nchannel: {4}\ntimestamp: {5}".format(self.messageType, self.message, self.hostname, self.nickname, self.channel, self.timestamp))
+        self.config = {
+            'bot'   : { 'debug'     : True,
+                        'hostname'  : "",
+                        'nickname'  : "",
+                        'bouncerHostname' : "",
+            },
+            'db'    : { 'debug'     : True,
+                        'dbHost'    : "",
+                        'dbUser'    : "",
+                        'dbPasswd'  : "",
+                        'dbTable'   : "",
+                        'dbName'    : '',
+                        'dbCharset' : 'utf8',
+                        'dbMaxReconnectAttempts'    : 10,
+                        'dbReconnectInterval'   :   1.0,
+            },
+            'web'   : { 'debug'             : True,
+                        'host'              : "",
+                        'port'              : 0000,
+                        'password'          : "",
+                        'socketMsgFormat'   : "",
+            }
+        }
+        self.dbPoster = db_poster(self.config['db'])
+        self.logWatcher = log_watcher(self.config['bot'], self.ircLogManager, self.dbPoster)
+        self.weblog_server = weblog_server(self.config['web'], self.logWatcher, self.botSocket)
+    def start(self):
+        '''Startup operations.'''
+        self.weblog_server.startServer()
+    def shutdown(self):
+        '''Shutdown operations.'''
+        self.weblog_server.stopServer()
 
-class socketLog(object):
-	def __init__(self, parent):
-		self.parent = parent
-		self.ownHostname = "Laika@unaffiliated/mogdog66" # ownHostname and ownNick cannot be determined through the message elements, they must be supplied manually
-		self.ownNick = "Laika"
-	def log(self, line):
-		split_line = line.split(' ')
-		if split_line[0] == "PRIVMSG":
-			if not split_line[1].startswith(("#","&",)): # Avoid logging private messages
-				return
-			l = irc_line()
-			l.parseLine(split_line)
-			l.hostname = self.ownHostname
-			l.nickname = self.ownNick
-			self.parent.log_line(l)
+class db_poster(object):
+    def __init__(self, config):
+        self.config = config
+        self.db = None
+        self.messageQueue = []
+    def dbReconnect(self):
+        '''Will attempt to create a connection to the database a specified number of times with specified time between attempts (in seconds).'''
+        connectSuccess = False
+        connectAttempts = 0
+        while not connectSuccess and connectAttempts < self.config['dbMaxReconnectAttempts']:
+            try:
+                self.db = MySQLdb.connect(  host=self.config['dbHost'],
+                                            user=self.config['dbUser'],
+                                            passwd=self.config['dbPasswd'],
+                                            db=self.config['dbName'],
+                                            charset=self.config['dbCharset']  )
+            except MySQLdb.OperationalError as e:
+                if self.config.get('debug'):
+                    print("Database connection error: %s", repr(e))
+                    print("Attempting to reconnect in %d seconds (attempt %d/%d)" % (self.config.get('dbReconnectInterval'),connectAttempts+1,self.config.get('dbMaxReconnectAttempts')))
+                time.sleep(self.config['dbReconnectInterval'])
+                connectAttempts+=1
+                continue
+            connectSuccess = True
+        if not connectSuccess: # We've maxed out our attempts, raise the exception again but this time let it be uncaught
+            if self.config.get('debug'):
+                print("Was not able to reconnect to the server after %d attempts. Giving up" % connectAttempts+1)
+            raise
+    def getDatabaseConnection(self):
+        '''Pings the db connection to check status. If an error occurs, try to reconnect.'''
+        try:
+            self.db.ping()
+        except (AttributeError, MySQLdb.OperationalError): # self.db isn't set, or the connection is lost. Either way, reconnect
+            self.dbReconnect()
+    def addToQueue(self, item):
+        self.messageQueue.append(item)
+    def dbCommit(self):
+        '''Attempt to execute all pending lines.'''
+        for item in self.messageQueue:
+            self.getDatabaseConnection()
+            c = self.db.cursor()
+            try:
+                c.execute("INSERT INTO "+self.config['dbTable']+" (message, nick, hostname, channel, timestamp, msgType) VALUES (%s, %s, %s, %s, %s, %s)", item)
+            except Exception as e:
+                if self.config.get('debug'):
+                    print("Could not execute the current line (%s)\nException details: %s" % (item, e))
+                continue # Leave it in the queue for future execution attempts
+            self.messageQueue.remove(item)
+            c.close()
+        if not self.messageQueue: # An empty list means no errors occured, it is safe to try a commit
+            self.db.commit()
+    def logIrcLine(self, ircLine):
+        '''Concert irc_log object into values for database insertion.'''
+        self.addToQueue((ircLine.message, ircLine.nickname, ircLine.hostname, ircLine.channel, ircLine.timestamp, ircLine.messageType))
+        self.dbCommit()
+            
+class log_watcher(object):
+    ### Registers itself and necessary objects with Laika's logging system and prepares lines for logging into a weblog database.
+    def __init__(self, config, ircLogManager, dbPoster):
+        self.logConfig = config
+        self.ircLogManager = ircLogManager
+        self.ircLogManager.register(self)
+        self.db = dbPoster
+        self.channelsByNickname = {}
+    def mapChannelToNickname(self, nickname, channel):
+        '''Maintain a mapping of nicknames to all the channels that nickname has been discovered in (discovery is possible when they send a message)'''
+        if not nickname in self.channelsByNickname:
+            self.channelsByNickname[nickname] = []
+            self.channelsByNickname[nickname].append(channel)
+        else:
+            if not channel in self.channelsByNickname[nickname]:
+                self.channelsByNickname[nickname].append(channel)
+    def logChannelData(self, *args):
+        '''Receive channel logs to log what others have posted into channels.'''
+        split_line = args[1]
+        l = irc_line()
+        l.parseLine(split_line)
+        if l.hostname != self.logConfig.get('bouncerHostname'): # Avoid logging bouncer messages (if any)
+            self.mapChannelToNickname(l.nickname, l.channel)
+            self.db.logIrcLine(l)
+        if self.logConfig.get('debug'):
+            print("[Channel] %s" % l)
+    def logSocketData(self, line):
+        '''Receive socket logs to log what has gone out through the socket (i.e what the bot has said).'''
+        l = irc_line()
+        try:
+            l.parseLine(line)
+        except NotImplementedError: # This line wasn't an outbound message to a channel
+            return
+        l.hostname = self.logConfig.get('hostname')
+        l.nickname = self.logConfig.get('nickname')
+        if self.logConfig.get('debug'):
+            print("[Socket] %s" % l)
+        self.db.logIrcLine(l)
+    def logServerData(self, line):
+        '''Receive server logs for messages sent from the IRC server that aren't channel messages (e.g QUIT notices).'''
+        l = irc_line()
+        try:
+            l.parseLine(line)
+        except NotImplementedError:
+            ## If it's not a message of a known type (QUIT, etc), disregard this line for logging.
+            return
+        if l.messageType == "QUIT" or l.messageType == "NICK": # Use the mapping of nicks to channels that nick was in to log lines for each channel they were in
+            if l.nickname in self.channelsByNickname:
+                for c in self.channelsByNickname[l.nickname]:
+                    l.channel = c
+                    self.db.logIrcLine(l)
+                del self.channelsByNickname[l.nickname]
+            return
+        if l.channel == self.logConfig.get('nickname'): # Don't log PMs sent to the bot
+            return
+        if self.logConfig.get('debug'):
+            print("[Server] %s" % l)
+        self.db.logIrcLine(l)
+    def logWebData(self, lineConfig):
+        l = irc_line()
+        l.loadFromConfig(lineConfig)
+        # Set previous unknowns manually
+        l.hostname = self.logConfig.get('hostname')
+        l.messageType = "WMSG"
+        if self.logConfig.get('debug'):
+            print("[Web] %s" % l)
+        self.db.logIrcLine(l)
 
-class serverLog(object):
-	def __init__(self, parent):
-		self.parent = parent # Allow upward passing messages
-	def log(self, line):
-		try:
-			l = irc_line()
-			l.parseLine(line)
-			if l.messageType == "QUIT": # Craft a QUIT line for all channels the nickname was known to be in
-				try:
-					for chan in self.parent.parent.nickInfo[l.nickname]:
-						l.channel = chan
-						self.parent.log_line(l)
-					del self.parent.parent.nickInfo[l.nickname]
-					return
-				except KeyError:
-					## Nickname quit before we had a chance to log what channel(s) they were in.
-					## Since we don't know what channels they're in, we can't insert anything
-					## into the db
-					return
-			self.parent.parent.mapNick(l.nickname, l.channel)
-			self.parent.log_line(l)
-		except RuntimeError:
-			## Not all server lines are useful for DB logging (MOTD, etc.), so writing in every server case is pointless.
-			## Instead, this exception catch catches irc_line.parseLine()'s RuntimeError when it cannot figure out the
-			## type of message. We know that this line can be safely ignored.
-			return
+class irc_line(object):
+    def __init__(self):
+        self.message = ""
+        self.nickname = None
+        self.hostname = None
+        self.timestamp = datetime.datetime.now() # Automatically generate on instance spawn
+        self.channel = None
+        self.messageType = None
+    def __repr__(self):
+        '''More useful object representation, convenient for debugging.'''
+        return "{ 'message' : \"%s\", 'nickname' : \"%s\", 'hostname' : \"%s\", 'timestamp' : \"%s\", 'channel' : \"%s\", 'messageType' : \"%s\" }" % (
+            self.message,
+            self.nickname,
+            self.hostname,
+            self.timestamp,
+            self.channel,
+            self.messageType
+            )
+    def determine_messageType(self, split_line):
+        '''Classifies line into one of any known IRC line types.'''
+        keyMappings = {
+            'PRIVMSG'   :   "PMSG",
+            'SOCKETMSG' :   "SMSG",
+            'WEBMSG'    :   "WMSG",
+            'NOTICE'    :   "NTCE",
+            'ACTION'    :   "ACTN",
+            'JOIN'      :   "JOIN",
+            'PART'      :   "PART",
+            'QUIT'      :   "QUIT",
+            'NICK'      :   "NICK",
+            'TOPIC'     :   "TPIC",
+        }
+        if len(split_line) > 3 and split_line[3] == ":\x01ACTION":
+            return keyMappings['ACTION']
+        if split_line[0] == "PRIVMSG": # Message came from the socket log (outbound to IRC server)
+            return keyMappings["SOCKETMSG"]  
+        try:
+            return keyMappings[split_line[1]]
+        except KeyError:
+            raise NotImplementedError("Line is of unknown type")
+    def extract_message(self, split_line):
+        '''Sets or reconstructs message string based on messageType.'''
+        if self.messageType == "JOIN":
+            return '' # There is never a message supplied with JOIN
+        if self.messageType == "PART": # Return part message if supplied
+            return ' '.join(split_line[3:])[1:] if len(split_line) > 3 else ""
+        elif self.messageType == "NICK":
+            return (split_line[2])[1:]
+        elif self.messageType == "QUIT": # Return quit message if supplied
+            return ' '.join(split_line[2:])[1:] if len(split_line) > 2 else ""
+        elif self.messageType == "SMSG":
+            if split_line[2] == ":\x01ACTION": # If its a socket message, we need to check for an ACTION and update splitting indexes accordingly
+                self.messageType = "ACTN"
+                return ' '.join(split_line[3:]).replace("\x01","")
+            return ' '.join(split_line[2:])[1:]
+        elif self.messageType == "ACTN":
+            return ' '.join(split_line[4:]).replace("\x01","")
+        else:
+            return ' '.join(split_line[3:])[1:]
+    def extract_hostname(self, split_line):
+        '''Extracts hostname from IRC line.'''
+        if not self.messageType == "SMSG": # Socket messages have unknown hostnames, so it must be applied out of this scope
+            return split_line[0][1:]
+    def extract_nickname(self, split_line):
+        '''Extracts nickname from IRC line.'''
+        if not self.messageType == "SMSG": # Socket messages have unknown nicks at this scope, it must be applied elsewhere
+            return self.hostname.split('!', 1)[0]
+    def extract_channel(self, split_line):
+        '''Extracts destination channel from IRC line.'''
+        if self.messageType == "QUIT" or self.messageType == "NICK": # Server quits and nick changes do not specify channel, and it is unknown at this scope
+            return None
+        if self.messageType == "SMSG":
+            return split_line[1].replace('#','') # Leading pound is assumed by outer scopes
+        else:
+            channel = split_line[2].replace('#','')
+            return channel[1:] if channel.startswith(':') else channel # Some servers will format channel as :#channel instead of #channel
+    def parseLine(self, line):
+        '''Accepts an IRC line and parses it into relevant internal variables.'''
+        if type(line) is list: # Someone has pre-split the line
+            split_line = line
+        elif type(line) is str:
+            split_line = line.split(' ')
+        else:
+            raise NotImplementedError("Provided line is of invalid type (expected 'str' or 'list')")
+        self.messageType = self.determine_messageType(split_line)
+        self.channel = self.extract_channel(split_line)
+        self.message = self.extract_message(split_line)
+        self.hostname = self.extract_hostname(split_line)
+        self.nickname = self.extract_nickname(split_line)
+    def loadFromConfig(self, config):
+        '''Instead of setting locals with message parsing, allow locals to be set directly with a configuration dictionary.'''
+        self.message = config.get('message')
+        self.nickname = config.get('nickname')
+        self.hostname = config.get('hostname')
+        self.timestamp = config.get('timestamp')
+        self.channel = config.get('channel')
+        self.messageType = config.get('messageType')
 
-class dummy_logger(object):
-	def __init__(self, parent):
-		self.parent = parent
-		self.serverLog = serverLog(self)
-		self.socketLog = socketLog(self)
-	def channelLog(self, channel, line):
-		'''Method to catch channel messages coming from Laika's log observer.'''
-		l = irc_line()
-		l.parseLine(line)
-		self.log_line(l)
-	def log_line(self, l):
-		'''Method for self and children to send lines upward for DB logging.'''
-		self.parent.log(l)
+class serverHandler(socketserver.BaseRequestHandler):
+    def sendToSocket(self, line):
+        data = self.server.config.get('socketMsgFormat').format(**line)
+        if self.server.config['debug']:
+            print("%s sending this line to the bot's outbound socket: %s" % (threading.current_thread(), data))
+        self.server.botSocket.socketQueue.addToQueue(data, reportToQueue=False)
+    def receive(self, connection, bytes_requested):
+        data = b''
+        while len(data) != bytes_requested:
+            data += connection.recv(bytes_requested - len(data))
+        return data
+    def handle(self):
+        self.request.settimeout(30)
+        currentThread = threading.current_thread()
+        data = self.request.recv(4)
+        if data == b'WOOF': # Connection initiated
+            if self.server.config['debug']:
+                print("%s Connection initiated"%currentThread)
+                
+            client_time, client_salt = struct.unpack('!L10s', self.receive(self.request, struct.calcsize('!L10s')))
+            server_time = int(time.time()) # Cast as int to remove decimal inaccuracies in pack/unpacking
+            if not abs(client_time - server_time) < 120: # System times too far apart (2min threshold)
+                if self.server.config['debug']:
+                    print("%s Failing connection due to time mismatch"%currentThread)
+                self.request.sendall(struct.pack('19s', b"laika:TIME_MISMATCH"))
+                return
+            if self.server.config['debug']:
+                print("%s Client salt received (%s) and client/server time difference is acceptable"%(currentThread, repr(client_salt)))
+            self.request.sendall(struct.pack('19s', b"laika:OK"))
 
-class log_poster(object):
-	def __init__(self, parent, ircLog):
-		self.parent = parent
-		self.ircLog = ircLog
-		self.db = None
-		self.cursor = None
-		self.failedMesages = []
-		self.backoff = 0.5
-		self.backoffMax = 300 # 5 minutes
-		self.ownNick = "Laika"
-		self.bouncer_hostname = "***!znc@znc.in"
-		self.nickInfo = {} # Dict for storing what channels nicknames are in, to properly deal with QUIT messages
-	def run(self):
-		self.db = MySQLdb.connect(host="localhost", user="", passwd="", db="irc-weblogs", charset="utf8") # Production login omitted
-		channel_logs = dummy_logger(self)
-		self.cursor = self.db.cursor()
-		self.ircLog.register(channel_logs)
-	def insert_into_db(self, data_line):
-		insert_line = (	"INSERT INTO `irc-weblogs`.log_line "
-				"(message, nick, timestamp, channel, msgType, hostname)"
-				"VALUES (%s, %s, %s, %s, %s, %s)")
-		try:
-			for fm in self.failedMesages: # Always make sure failed messages are sent before any new ones
-				self.cursor.execute(insert_line, fm)
-			self.cursor.execute(insert_line, data_line)
-			self.db.commit()
-		except MySQLdb.Error as e:
-			print("MySQLdb Error %d: %s"%(e.args[0], e.args[1]))
-			self.failedMesages.append(data_line)
-			self.backoff_timer()
-	def mapNick(self, nickname, channel):
-		if not nickname in self.nickInfo: # No dict mapping for this nickname, make one
-			self.nickInfo[nickname] = []
-			self.nickInfo[nickname].append(channel) # No existence checking required
-		else: # Dict mapping exists, add this channel to their array of channels if not present
-			if not channel in self.nickInfo[nickname]:
-				self.nickInfo[nickname].append(channel)
-	def log(self, line):
-		if line.channel == self.ownNick or line.channel == self.ownNick[1:]: # Also check against nickname[1:], due to how channel parsing works
-			return # Do not log private messages
-		if line.hostname == self.bouncer_hostname:
-			return # Don't bother logging bouncer messages
-		self.mapNick(line.nickname, line.channel)
-		#try:
-			#line.printData() ## DEBUG
-		#except:
-			#pass
-		data_line = (line.message, line.nickname, line.timestamp, line.channel, line.messageType, line.hostname,)
-		self.insert_into_db(data_line)
-	def backoff_timer(self):
-		print("Sleeping for {0} seconds.".format(min(self.backoff * 2, self.backoffMax))) ##DEBUG
-		time.sleep(min(self.backoff * 2, self.backoffMax))
-		self.backoff = self.backoff * 2
+            server_salt = os.urandom(10)
+            self.request.sendall(struct.pack('!L10s', server_time, server_salt))
+            if self.server.config['debug']:
+                print("%s Sent server salt (%s) to client"%(currentThread, repr(server_salt)))
+            
+            ## Verify
+            valid_proof = hashlib.sha224()
+            valid_proof.update(struct.pack('!L', server_time) + struct.pack('!L', client_time) + server_salt + client_salt + bytes(self.server.config['password'], 'utf8'))
+            if self.server.config['debug']:
+                print("%s Waiting for client to send proof"%currentThread)
+                       
+            client_proof = self.receive(self.request, len(valid_proof.digest()))
+            if not client_proof == valid_proof.digest():
+                if self.server.config['debug']:
+                    print("%s Failing connection due to bad client proof"%currentThread)
+                self.request.sendall(struct.pack('19s', b"laika:INVALID_PROOF"))
+                return
+            if self.server.config['debug']:
+                print("%s Valid proof received from client"%currentThread)
+            self.request.sendall(struct.pack('19s', b"laika:OK"))
 
-class socket_listener(object):
-	def __init__(self, parent):
-		self.parent = parent
-		self.socketServer = None
-		self.runState = True
-		self.port = 9989
-		self.encoding = 'utf-8'
-		self.create_socket()
-	def create_socket(self):
-		self.socketServer = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-		try:
-			self.socketServer.bind(('', self.port)) # Bind to any address this machine can be reached on, port `self.port`
-		except socket.error as e:
-			print("Socking binding failed:",e)
-			self.runState = False
-			return
-		self.socketServer.listen(5) # Connect request queue of 5
-	def receive(self, connection, bytes_requested):
-		data = b''
-		while len(data) != bytes_requested:
-			data += connection.recv(bytes_requested - len(data))
-		return data
-	def client_thread(self, connection):
-		__password = b"" # Production password omitted
-		while True:
-			data = connection.recv(1024)
-			if data == b'WOOF':
-				client_time, client_salt = struct.unpack('!L10s', self.receive(connection, struct.calcsize('!L10s')))
-				server_time = int(time.time()) # Cast as int to remove decimal inaccuracies in pack/unpacking
-				if not abs(client_time - server_time) < 120: # System times too far apart (2min threshold)
-					break
+            msgSize = struct.unpack('!I', self.receive(self.request, struct.calcsize('!I')))[0]
+            data = self.receive(self.request, int(msgSize))
+            if not len(data) is msgSize:
+                return
+            self.request.sendall(struct.pack('19s', b"laika:OK"))
+            deserializedData = json.loads(data.decode('utf8'))
+            deserializedData['timestamp'] = datetimeDeserialize(deserializedData.get('timestamp'))
+            if self.server.config['debug']:
+                print("%s Received %s bytes from server: %s" % (currentThread, repr(msgSize), repr(deserializedData)))
 
-				server_salt = os.urandom(10)
-				connection.send(struct.pack('!L10s', server_time, server_salt))
+            # Send line to socket to be spoken
+            self.sendToSocket(deserializedData)
+            # Send line to the logger for database insertion
+            self.server.logWatcher.logWebData(deserializedData)
+            
+            if self.server.config['debug']:
+                print("%s Connection closing"%currentThread)
 
-				## Verify
-				valid_proof = hashlib.sha224()
-				valid_proof.update(struct.pack('!L', server_time) + struct.pack('!L', client_time) + server_salt + client_salt + __password)
-				client_proof = self.receive(connection, len(valid_proof.digest()))
-				if not client_proof == valid_proof.digest():
-					break
+class threadedServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    allow_reuse_address = True
 
-				msgSize = struct.unpack('!I', self.receive(connection, struct.calcsize('!I')))[0]
-				socket_msg = self.receive(connection, int(msgSize))
-				self.parent.socket.socketQueue.addToQueue(socket_msg.decode('utf-8'))
-				continue
-			if not data:
-				break
-		connection.shutdown(socket.SHUT_WR)
-		connection.close()
-	def listen_loop(self):
-		while self.runState:
-			(clientsocket, address) = self.socketServer.accept()
-			ct = threading.Thread(target=self.client_thread, args=(clientsocket,))
-			ct.start()
-		self.socketServer.shutdown(socket.SHUT_WR)
-		self.socketServer.close()
+class weblog_server(object):
+    def __init__(self, config, logWatcher, botSocket):
+        self.config = config
+        self.logWatcher = logWatcher
+        self.botSocket = botSocket
+        self.server = None
+        self.serverThread = None
+    def spawnServer(self):
+        self.server = threadedServer((self.config['host'], self.config['port']), serverHandler)
+        self.server.config = self.config
+        self.server.logWatcher = self.logWatcher
+        self.server.botSocket = self.botSocket
+        ip, port = self.server.server_address
+        if self.config['debug']:
+            print("Starting weblog listening server on %s port %s" % (repr(ip), repr(port)))
+    def startServer(self):
+        self.spawnServer()
+        self.server_thread = threading.Thread(target=self.server.serve_forever)
+        self.server_thread.daemon = True
+        self.server_thread.start()
+        if self.config['debug']:
+            print("Weblog listening server started")
+    def stopServer(self):
+        self.server.shutdown()
+        if self.config['debug']:
+            print("Weblog listening server shut down")
+
+def datetimeDeserialize(str):
+    return dateutil.parser.parse(str)
 
 def run(*args):
-	weblog_manager(args[0], args[1], args[2], args[3])
+    global manager
+    manager = weblog_manager(*args)
+    manager.start()
+
+def shutdown():
+    global manager
+    manager.shutdown()
