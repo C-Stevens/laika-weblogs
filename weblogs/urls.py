@@ -1,24 +1,16 @@
-"""weblogs URL Configuration
-
-The `urlpatterns` list routes URLs to views. For more information please see:
-    https://docs.djangoproject.com/en/1.8/topics/http/urls/
-Examples:
-Function views
-    1. Add an import:  from my_app import views
-    2. Add a URL to urlpatterns:  url(r'^$', views.home, name='home')
-Class-based views
-    1. Add an import:  from other_app.views import Home
-    2. Add a URL to urlpatterns:  url(r'^$', Home.as_view(), name='home')
-Including another URLconf
-    1. Add an import:  from blog import urls as blog_urls
-    2. Add a URL to urlpatterns:  url(r'^blog/', include(blog_urls))
-"""
-from django.conf.urls import include, url
-from django.contrib import admin
+from django.urls import path, re_path
 from log import views
 
 urlpatterns = [
-    url(r'^admin/', include(admin.site.urls)),
-    url(r'^weblog/', include('log.urls')),
-    url(r'^$', views.root)
+    # Lack of specificity redirects
+    path('', views.root),
+    re_path(r'^api/(?P<channel>[^,/ ]{1,200})/(?P<latest_id>\d*)(?:|/)$', views.api),
+    re_path(r'^log(?:|/)$', views.log),
+    # Legacy redirects
+    re_path(r'^weblog(?:|/)$', views.log),
+    re_path(r'^weblog/(?P<channel>[^,/ ]{1,200})(?:|/)$', views.weblogs),
+    # New URL patterns
+    re_path(r'log/(?P<channel>[^/ ]{1,200})(?:|/)$', views.channel),
+    re_path(r'log/(?P<channel>[^/ ]{1,200})/dl(?:|/)$', views.download),
+    re_path(r'log/(?P<channel>[^/ ]{1,200})/dl/(?P<date>[0-9]{4}-[0-9]{2}-[0-9]{2}).(?P<format>(html|json|yaml|xml))(?:|/)$', views.download),
 ]
