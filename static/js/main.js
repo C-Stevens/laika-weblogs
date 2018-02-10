@@ -10,6 +10,7 @@ $(document).ready(function() {
         $.ajax({
             type: "GET",
             url: "/api/"+window.location.pathname.split("/")[2]+"/"+latest_message_id,
+            cache: false,
             success: function(json_response) {
                 if (!$.isEmptyObject(json_response)) {
                     $("#loader").show();
